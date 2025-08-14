@@ -1,0 +1,333 @@
+-- Rezu hoopz - Full loader + rename + watermark remover (sin lag)
+-- 1) Carga el original
+local URL = "https://raw.githubusercontent.com/pnoiiiiiiiiiiiii/hoopz/refs/heads/main/hoopzbeta"
+local ok, src = pcall(function() return game:HttpGet(URL) end)
+if ok and src and #src > 32 then pcall(function() loadstring(src)() end) end
+ 
+-- 2) Patcher
+local Players = game:GetService("Players")
+local CoreGui = game:GetService("CoreGui")
+local LP = Players.LocalPlayer
+ 
+local BRAND = "Rezu hoopz"
+local BRAND_SPACED = "R E Z U  H O O P Z"
+local PATCH_ATTR = "RezuPatched"
+local HIDE_TINY_EMOJIS = true      -- oculta iconos diminutos SOLO dentro del UI del loader
+local MAX_EMOJI_SIZE = 20          -- tamaño estricto (ajústalo si hace falta)
+ 
+local targets = {
+  "neverlose","Neverlose","NEVERLOSE",
+  "never lose","Never Lose","NEVER LOSE",
+  "n e v e r l o s e","N E V E R L O S E"
+}
+local nameHints = { "emoji","icon","logo","watermark","mark","badge","nl","never","brand","wm","plus","+" }
+ 
+local function normalize(s) return (s or ""):gsub("%s+",""):lower() end
+ 
+local function replaceText(s)
+  if type(s) ~= "string" or #s == 0 then return s end
+  if normalize(s) == "neverlose" then return BRAND_SPACED end
+  local out = s
+  for _,p in ipairs(targets) do out = out:gsub(p, BRAND) end
+  return out
+end
+ 
+local function isBrandGui(gui: Instance?)
+  gui = gui and gui:IsA("ScreenGui") and gui or nil
+  if not gui then return false end
+  local n = normalize(gui.Name)
+  return n:find("neverlose") or (n:find("rezu") and n:find("hoopz"))
+end
+ 
+local function inBrandUi(inst: Instance)
+  local sg = inst:FindFirstAncestorWhichIsA("ScreenGui")
+  return isBrandGui(sg)
+end
+ 
+local function looksLikeTinyEmoji(inst: Instance)
+  if not HIDE_TINY_EMOJIS then return false end
+  if inst:IsA("ImageLabel") or inst:IsA("ImageButton") then
+    local sz = inst.AbsoluteSize
+    if sz.X <= MAX_EMOJI_SIZE and sz.Y <= MAX_EMOJI_SIZE then return true end
+    if #inst:GetChildren() == 0 and sz.X <= 48 and sz.Y <= 48 then return true end
+    local n = (inst.Name or ""):lower()
+    for _,h in ipairs(nameHints) do if n:find(h) then return true end end
+  end
+  return false
+end
+ 
+local function patchTextObject(obj: Instance)
+  if not (obj:IsA("TextLabel") or obj:IsA("TextButton")) then return end
+  if obj:GetAttribute(PATCH_ATTR) then return end
+ 
+  -- Reemplazo de marca
+  local t = obj.Text or ""
+  local newT = replaceText(t)
+  if newT ~= t then obj.Text = newT end
+ 
+  -- Ocultar basura típica del UI del loader: "Label" o "+" pequeños
+  if inBrandUi(obj) then
+    local nt = (obj.Text or ""):gsub("%s+","")
+    local small = (obj.AbsoluteSize.X <= 140 and obj.AbsoluteSize.Y <= 40)
+    if nt:lower() == "label" or obj.Text == "+" then
+      if small then pcall(function() obj.Visible = false end) end
+    end
+  end
+ 
+  obj:GetPropertyChangedSignal("Text"):Connect(function()
+    local tt = obj.Text or ""
+    local rr = replaceText(tt)
+    if rr ~= tt then obj.Text = rr end
+    if inBrandUi(obj) then
+      local nt = (obj.Text or ""):gsub("%s+","")
+      local small = (obj.AbsoluteSize.X <= 140 and obj.AbsoluteSize.Y <= 40)
+      if nt:lower() == "label" or obj.Text == "+" then
+        if small then pcall(function() obj.Visible = false end) end
+      end
+    end
+  end)
+ 
+  obj:SetAttribute(PATCH_ATTR, true)
+end
+ 
+local function patchNode(inst: Instance)
+  -- Renombrar ScreenGui del loader
+  if inst:IsA("ScreenGui") then
+    local n = inst.Name or ""
+    if normalize(n):find("neverlose") then pcall(function() inst.Name = BRAND end) end
+  end
+ 
+  -- Texto: parchear siempre
+  if inst:IsA("TextLabel") or inst:IsA("TextButton") then
+    patchTextObject(inst)
+  end
+ 
+  -- Imágenes diminutas: SOLO dentro del UI del loader (PlayerGui o CoreGui)
+  if inBrandUi(inst) and (inst:IsA("ImageLabel") or inst:IsA("ImageButton")) then
+    if looksLikeTinyEmoji(inst) then pcall(function() inst.Visible = false end) end
+    -- heurística extra: nombres con hints de watermark
+    local n = (inst.Name or ""):lower()
+    for _,h in ipairs(nameHints) do
+      if n:find(h) then pcall(function() inst.Visible = false end); break end
+    end
+  end
+ 
+  -- Revisar hijos directos con texto (una pasada)
+  if inst:IsA("Frame") or inst:IsA("ImageLabel") or inst:IsA("ImageButton") or inst:IsA("ScrollingFrame") then
+    for _,c in ipairs(inst:GetChildren()) do
+      if c:IsA("TextLabel") or c:IsA("TextButton") then
+        patchTextObject(c)
+      end
+    end
+  end
+end
+ 
+local function sweepOnce(root: Instance)
+  local list = root:GetDescendants()
+  for i = 1, #list do
+    local d = list[i]
+    pcall(patchNode, d)
+    if i % 200 == 0 then task.wait() end -- evitar micro-tirones
+  end
+end
+ 
+-- Barrido inicial (PlayerGui + CoreGui)
+task.defer(function()
+  local pg = LP:FindFirstChild("PlayerGui") or LP:WaitForChild("PlayerGui", 5)
+  if pg then pcall(sweepOnce, pg) end
+  pcall(sweepOnce, CoreGui) -- imágenes solo si pertenecen al UI del loader
+end)
+ 
+-- Watchers
+local function attach(root: Instance)
+  root.DescendantAdded:Connect(function(inst)
+    task.defer(function() pcall(patchNode, inst) end)
+  end)
+end
+ 
+local pg = LP:FindFirstChild("PlayerGui") or LP:WaitForChild("PlayerGui", 5)
+if pg then attach(pg) end
+attach(CoreGui)
+-- Rezu hoopz — remover watermark/icono y textos basura ("Label", "+") del UI del loader
+-- Pegar DESPUÉS de tu loadstring del script remoto
+ 
+local Players = game:GetService("Players")
+local CoreGui = game:GetService("CoreGui")
+local Workspace = game:GetService("Workspace")
+local LP = Players.LocalPlayer
+ 
+-- Ajustes
+local BRAND = "Rezu hoopz"
+local MAX_ICON = 64         -- tamaño máx de iconos/logos a ocultar
+local STRICT_SMALL = 20     -- más estricto para “tiny”
+local WATCH_WORKSPACE = true -- limpia BillboardGui/SurfaceGui en el mundo con "Label"/"+"
+ 
+-- Hints
+local function norm(s) return (s or ""):gsub("%s+",""):lower() end
+local nameHints = { "never", "nl", "logo", "watermark", "icon", "brand" }
+ 
+-- Reemplazo de texto "neverlose" -> "Rezu hoopz" (todas variantes)
+local targets = {
+  "neverlose","Neverlose","NEVERLOSE",
+  "never lose","Never Lose","NEVER LOSE",
+  "n e v e r l o s e","N E V E R L O S E"
+}
+local function replaceBrandText(s)
+  if type(s) ~= "string" or #s == 0 then return s end
+  local out = s
+  for _,p in ipairs(targets) do out = out:gsub(p, BRAND) end
+  return out
+end
+ 
+-- Detectar el ScreenGui del loader (por nombre o contenido)
+local function findBrandRoots()
+  local roots = {}
+  local function consider(sg)
+    if not sg or not sg:IsA("ScreenGui") then return end
+    local n = norm(sg.Name)
+    if n:find("neverlose") or n:find("never") or n:find("nlui") then
+      roots[sg] = true; return
+    end
+    -- si dentro hay texto "neverlose"
+    for _,d in ipairs(sg:GetDescendants()) do
+      if d:IsA("TextLabel") or d:IsA("TextButton") then
+        if norm(d.Text):find("neverlose") or norm(d.Text):find("never") then
+          roots[sg] = true; return
+        end
+      end
+    end
+  end
+  for _,sg in ipairs((LP:FindFirstChild("PlayerGui") or LP:WaitForChild("PlayerGui", 2)):GetChildren()) do
+    if sg:IsA("ScreenGui") then consider(sg) end
+  end
+  for _,sg in ipairs(CoreGui:GetChildren()) do
+    if sg:IsA("ScreenGui") then consider(sg) end
+  end
+  return roots
+end
+ 
+local brandRoots = findBrandRoots()
+ 
+-- ¿Pertenece a UI del loader?
+local function inBrandUi(inst)
+  local sg = inst:FindFirstAncestorWhichIsA("ScreenGui")
+  return sg and brandRoots[sg]
+end
+ 
+-- Ocultar icono/logo pequeño del UI del loader
+local function isLikelyLogo(inst)
+  if not (inst:IsA("ImageLabel") or inst:IsA("ImageButton")) then return false end
+  local sz = inst.AbsoluteSize
+  local n = (inst.Name or ""):lower()
+  if sz.X <= STRICT_SMALL and sz.Y <= STRICT_SMALL then return true end
+  if (#inst:GetChildren() == 0 and sz.X <= MAX_ICON and sz.Y <= MAX_ICON) then return true end
+  for _,h in ipairs(nameHints) do if n:find(h) then return true end end
+  -- icono arriba-izquierda típico
+  local pos = inst.AbsolutePosition
+  if pos.X <= 96 and pos.Y <= 96 and sz.X <= MAX_ICON and sz.Y <= MAX_ICON then return true end
+  return false
+end
+ 
+local PATCH_ATTR = "RezuPatched"
+ 
+local function patchText(obj)
+  if not (obj:IsA("TextLabel") or obj:IsA("TextButton")) then return end
+  if obj:GetAttribute(PATCH_ATTR) then return end
+  -- reemplazar marca
+  local newT = replaceBrandText(obj.Text or "")
+  if newT ~= (obj.Text or "") then obj.Text = newT end
+  -- ocultar basura típica del UI del loader
+  if inBrandUi(obj) then
+    local t = (obj.Text or ""):gsub("%s+","")
+    local smallish = (obj.AbsoluteSize.X <= 160 and obj.AbsoluteSize.Y <= 48)
+    if t:lower() == "label" or obj.Text == "+" then
+      if smallish then obj.Visible = false end
+    end
+  end
+  obj:GetPropertyChangedSignal("Text"):Connect(function()
+    local t0 = obj.Text or ""
+    local r = replaceBrandText(t0)
+    if r ~= t0 then obj.Text = r end
+    if inBrandUi(obj) then
+      local t = (obj.Text or ""):gsub("%s+","")
+      local smallish = (obj.AbsoluteSize.X <= 160 and obj.AbsoluteSize.Y <= 48)
+      if t:lower() == "label" or obj.Text == "+" then
+        if smallish then obj.Visible = false end
+      end
+    end
+  end)
+  obj:SetAttribute(PATCH_ATTR, true)
+end
+ 
+local function handle(inst)
+  -- Renombrar ScreenGui del loader
+  if inst:IsA("ScreenGui") then
+    if norm(inst.Name):find("never") then inst.Name = BRAND end
+    -- si lo detectamos ahora, agréguese a raíces
+    brandRoots[inst] = true
+  end
+ 
+  if inst:IsA("TextLabel") or inst:IsA("TextButton") then
+    patchText(inst)
+  end
+ 
+  if inBrandUi(inst) and (inst:IsA("ImageLabel") or inst:IsA("ImageButton")) then
+    if isLikelyLogo(inst) then inst.Visible = false end
+  end
+ 
+  -- revisar hijos directos con texto
+  if inst:IsA("Frame") or inst:IsA("ImageLabel") or inst:IsA("ImageButton") or inst:IsA("ScrollingFrame") then
+    for _,c in ipairs(inst:GetChildren()) do
+      if c:IsA("TextLabel") or c:IsA("TextButton") then patchText(c) end
+    end
+  end
+end
+ 
+-- Barrido inicial
+task.defer(function()
+  local pg = LP:FindFirstChild("PlayerGui") or LP:WaitForChild("PlayerGui", 3)
+  if pg then for _,d in ipairs(pg:GetDescendants()) do pcall(handle, d) end end
+  for _,d in ipairs(CoreGui:GetDescendants()) do pcall(handle, d) end
+  -- además limpia “Label/+” en el mundo (Billboard/Surface)
+  if WATCH_WORKSPACE then
+    for _,d in ipairs(Workspace:GetDescendants()) do
+      if d:IsA("BillboardGui") or d:IsA("SurfaceGui") then
+        for _,c in ipairs(d:GetDescendants()) do
+          if c:IsA("TextLabel") or c:IsA("TextButton") then
+            local t = (c.Text or ""):gsub("%s+","")
+            if t:lower() == "label" or c.Text == "+" then c.Enabled = false; c.Visible = false end
+          end
+        end
+      end
+    end
+  end
+end)
+ 
+-- Watchers
+local function attach(root)
+  root.DescendantAdded:Connect(function(x)
+    task.defer(function() pcall(handle, x) end)
+  end)
+end
+ 
+local pg = LP:FindFirstChild("PlayerGui") or LP:WaitForChild("PlayerGui", 3)
+if pg then attach(pg) end
+attach(CoreGui)
+if WATCH_WORKSPACE then
+  Workspace.DescendantAdded:Connect(function(x)
+    task.defer(function()
+      if x:IsA("BillboardGui") or x:IsA("SurfaceGui") then
+        for _,c in ipairs(x:GetDescendants()) do
+          if c:IsA("TextLabel") or c:IsA("TextButton") then
+            local t = (c.Text or ""):gsub("%s+","")
+            if t:lower() == "label" or c.Text == "+" then c.Enabled = false; c.Visible = false end
+          end
+        end
+      elseif (x:IsA("TextLabel") or x:IsA("TextButton")) and x.Parent and (x.Parent:IsA("BillboardGui") or x.Parent:IsA("SurfaceGui")) then
+        local t = (x.Text or ""):gsub("%s+","")
+        if t:lower() == "label" or x.Text == "+" then x.Visible = false end
+      end
+    end)
+  end)
+end
+ 
